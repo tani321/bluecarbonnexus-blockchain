@@ -1,117 +1,140 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.27;
+pragma solidity ^0.8.19;
 
-contract CarbonCreditRegistry {
-    // Structure to store project information
+import "@openzeppelin/contracts/token/ERC1155/ERC1155.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/utils/Strings.sol";
+
+contract CarbonCreditRegistry is ERC1155, Ownable {
+    using Strings for uint256;
+    
+    uint256 public nextProjectId = 1;
+    uint256 public nextCreditId = 1;
+    
     struct Project {
-        uint256 id;
+        uint256 projectId;
         string name;
         string location;
+        uint256 area;
         address owner;
-        uint256 areaInHectares;
-        uint256 carbonCredits;
+        uint256 totalCreditsIssued;
         bool isActive;
-        uint256 registrationDate;
+        uint256 registeredAt;
     }
     
-    // State variables
-    address public admin;
-    uint256 public projectCounter;
+    struct CarbonCredit {
+        uint256 creditId;
+        uint256 projectId;
+        uint256 amount;
+        uint256 issuedAt;
+        string verificationHash;
+        bool isRetired;
+    }
     
-    // Mapping from project ID to Project
     mapping(uint256 => Project) public projects;
+    mapping(uint256 => CarbonCredit) public credits;
+    mapping(address => uint256[]) public userProjects;
     
-    // Events (for logging on blockchain)
-    event ProjectRegistered(
-        uint256 indexed projectId,
-        string name,
-        address owner,
-        uint256 areaInHectares
-    );
+    event ProjectRegistered(uint256 indexed projectId, string name, address owner);
+    event CreditsIssued(uint256 indexed creditId, uint256 projectId, uint256 amount);
+    event CreditsTransferred(address indexed from, address indexed to, uint256 creditId, uint256 amount);
+    event CreditsRetired(uint256 indexed creditId, uint256 amount, address by);
     
-    event CreditsIssued(
-        uint256 indexed projectId,
-        uint256 amount,
-        uint256 totalCredits
-    );
+    constructor() ERC1155("https://bluecarbonnexus.com/api/token/{id}.json") Ownable(msg.sender) {}
     
-    // Modifier: Only admin can call
-    modifier onlyAdmin() {
-        require(msg.sender == admin, "Only admin can perform this action");
-        _;
-    }
-    
-    // Constructor: Sets deployer as admin
-    constructor() {
-        admin = msg.sender;
-        projectCounter = 0;
-    }
-    
-    // Register a new mangrove conservation project
     function registerProject(
         string memory _name,
         string memory _location,
-        address _owner,
-        uint256 _areaInHectares
-    ) public onlyAdmin returns (uint256) {
-        projectCounter++;
+        uint256 _area
+    ) public returns (uint256) {
+        uint256 projectId = nextProjectId++;
         
-        projects[projectCounter] = Project({
-            id: projectCounter,
+        projects[projectId] = Project({
+            projectId: projectId,
             name: _name,
             location: _location,
-            owner: _owner,
-            areaInHectares: _areaInHectares,
-            carbonCredits: 0,
+            area: _area,
+            owner: msg.sender,
+            totalCreditsIssued: 0,
             isActive: true,
-            registrationDate: block.timestamp
+            registeredAt: block.timestamp
         });
         
-        emit ProjectRegistered(projectCounter, _name, _owner, _areaInHectares);
+        userProjects[msg.sender].push(projectId);
         
-        return projectCounter;
+        emit ProjectRegistered(projectId, _name, msg.sender);
+        return projectId;
     }
     
-    // Issue carbon credits to a project
-    function issueCredits(uint256 _projectId, uint256 _amount) public onlyAdmin {
-        require(projects[_projectId].isActive, "Project is not active");
-        require(_amount > 0, "Credit amount must be greater than 0");
-        
-        projects[_projectId].carbonCredits += _amount;
-        
-        emit CreditsIssued(_projectId, _amount, projects[_projectId].carbonCredits);
-    }
-    
-    // Get project details
-    function getProject(uint256 _projectId) public view returns (
-        uint256 id,
-        string memory name,
-        string memory location,
-        address owner,
-        uint256 areaInHectares,
-        uint256 carbonCredits,
-        bool isActive
-    ) {
-        Project memory p = projects[_projectId];
-        return (
-            p.id,
-            p.name,
-            p.location,
-            p.owner,
-            p.areaInHectares,
-            p.carbonCredits,
-            p.isActive
+    function issueCredits(
+        uint256 _projectId,
+        uint256 _amount,
+        string memory _verificationHash
+    ) public returns (uint256) {
+        require(projects[_projectId].isActive, "Project not active");
+        require(
+            projects[_projectId].owner == msg.sender || owner() == msg.sender,
+            "Not authorized"
         );
+        
+        uint256 creditId = nextCreditId++;
+        
+        credits[creditId] = CarbonCredit({
+            creditId: creditId,
+            projectId: _projectId,
+            amount: _amount,
+            issuedAt: block.timestamp,
+            verificationHash: _verificationHash,
+            isRetired: false
+        });
+        
+        projects[_projectId].totalCreditsIssued += _amount;
+        
+        _mint(projects[_projectId].owner, creditId, _amount, "");
+        
+        emit CreditsIssued(creditId, _projectId, _amount);
+        return creditId;
     }
     
-    // Get total projects registered
-    function getTotalProjects() public view returns (uint256) {
-        return projectCounter;
+    function transferCredits(
+        address _to,
+        uint256 _creditId,
+        uint256 _amount
+    ) public {
+        require(!credits[_creditId].isRetired, "Credits already retired");
+        require(balanceOf(msg.sender, _creditId) >= _amount, "Insufficient balance");
+        
+        safeTransferFrom(msg.sender, _to, _creditId, _amount, "");
+        
+        emit CreditsTransferred(msg.sender, _to, _creditId, _amount);
     }
     
-    // Deactivate a project
-    function deactivateProject(uint256 _projectId) public onlyAdmin {
-        require(projects[_projectId].id != 0, "Project does not exist");
-        projects[_projectId].isActive = false;
+    function retireCredits(uint256 _creditId, uint256 _amount) public {
+        require(balanceOf(msg.sender, _creditId) >= _amount, "Insufficient balance");
+        require(!credits[_creditId].isRetired, "Already retired");
+        
+        _burn(msg.sender, _creditId, _amount);
+        
+        if (balanceOf(msg.sender, _creditId) == 0) {
+            credits[_creditId].isRetired = true;
+        }
+        
+        emit CreditsRetired(_creditId, _amount, msg.sender);
+    }
+    
+    function getProject(uint256 _projectId) public view returns (Project memory) {
+        return projects[_projectId];
+    }
+    
+    function getCredit(uint256 _creditId) public view returns (CarbonCredit memory) {
+        return credits[_creditId];
+    }
+    
+    function getUserProjects(address _user) public view returns (uint256[] memory) {
+        return userProjects[_user];
+    }
+    
+    function getCreditBalance(address _user, uint256 _creditId) public view returns (uint256) {
+        return balanceOf(_user, _creditId);
     }
 }

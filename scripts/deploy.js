@@ -1,20 +1,15 @@
-const hre = require("hardhat");
-
 async function main() {
-  console.log("Deploying HelloBlockchain contract...");
-
-  const HelloBlockchain = await hre.ethers.getContractFactory("HelloBlockchain");
-  const hello = await HelloBlockchain.deploy();
-
-  await hello.deployed();
-
-  console.log("HelloBlockchain deployed to:", hello.address);
-  console.log("Initial message:", await hello.getMessage());
+  console.log("Deploying CarbonCreditRegistry contract...");
+  
+  const CarbonCreditRegistry = await ethers.getContractFactory("CarbonCreditRegistry");
+  const contract = await CarbonCreditRegistry.deploy();
+  await contract.deployed();
+  
+  console.log("CarbonCreditRegistry deployed to:", contract.address);
+  console.log("Save this address for your React app!");
 }
 
-main()
-  .then(() => process.exit(0))
-  .catch((error) => {
-    console.error(error);
-    process.exit(1);
-  });
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
